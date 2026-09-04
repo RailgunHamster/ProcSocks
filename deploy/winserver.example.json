@@ -1,0 +1,21 @@
+{
+  "listen": "127.0.0.1:7891",
+  "upstream": {
+    "host": "127.0.0.1",
+    "port": 7890
+  },
+  "processPatterns": [
+    "ChatGPT.exe",
+    "codex.exe"
+  ],
+  "bypassPatterns": [
+    "procsocks.exe",
+    "0dcloudCore.exe"
+  ],
+  "redirectorDir": "driver",
+  "driverName": "netfilter2",
+  "sniffTimeoutMs": 2000,
+  "connectTimeoutMs": 15000,
+  "maxSniffBytes": 65536,
+  "requireHostname": true
+}
