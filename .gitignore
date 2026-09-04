@@ -1,6 +1,7 @@
 /target
 /driver/
-/procsocks.json
+procsocks.json
+*.local.json
 *.log
 Redirector.bin
 nfapi.dll

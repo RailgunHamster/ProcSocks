@@ -144,3 +144,57 @@ fn default_max_sniff_bytes() -> usize {
 fn default_require_hostname() -> bool {
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn accepts_custom_upstream_socks_endpoint() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "upstream": {
+                    "host": "proxy.example.invalid",
+                    "port": 1080,
+                    "username": "example-user",
+                    "password": "example-password"
+                }
+            }"#,
+        )
+        .expect("custom upstream config should parse");
+
+        config
+            .validate_bridge()
+            .expect("custom upstream config should validate");
+        assert_eq!(config.upstream.host, "proxy.example.invalid");
+        assert_eq!(config.upstream.port, 1080);
+        assert_eq!(config.upstream.username.as_deref(), Some("example-user"));
+        assert_eq!(
+            config.upstream.password.as_deref(),
+            Some("example-password")
+        );
+    }
+
+    #[test]
+    fn rejects_partial_upstream_credentials() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "upstream": {
+                    "host": "127.0.0.1",
+                    "port": 7890,
+                    "username": "example-user"
+                }
+            }"#,
+        )
+        .expect("config should parse before validation");
+
+        let error = config
+            .validate_bridge()
+            .expect_err("partial credentials must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("username and password must be supplied together")
+        );
+    }
+}

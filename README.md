@@ -8,7 +8,7 @@ ProcSocks 是一个小型 Windows 命令行路由工具，可以只让指定进�
 TCP 连接通过已有的 SOCKS5 代理，而不必开启系统全局代理或 TUN 网卡。
 它主要面向不方便使用图形化分流工具的无人值守电脑和服务器。
 
-当前版本针对 WinServer 上的实际使用场景：
+当前版本面向 Windows 工作站和服务器上的以下使用场景：
 
 ```text
 指定进程
@@ -105,6 +105,53 @@ cargo build --release
 将 `config.example.json` 复制为 `procsocks.json`。示例默认只匹配
 `curl.exe`，便于在加入长期运行的程序前先验证完整链路。
 
+上游 SOCKS5 地址没有写死。修改 `upstream.host` 和 `upstream.port`
+即可使用其他地址或端口；如果代理需要认证，请同时填写 `username` 和
+`password`，否则两者都设为 `null` 或省略：
+
+```json
+"upstream": {
+  "host": "127.0.0.1",
+  "port": 7890,
+  "username": null,
+  "password": null
+}
+```
+
+服务只在启动时读取配置。修改后依次执行：
+
+```powershell
+.\procsocks.exe service stop
+.\procsocks.exe --config .\procsocks.json check
+.\procsocks.exe service start
+```
+
+完整配置项：
+
+| 字段 | 作用 | 默认值/限制 |
+| --- | --- | --- |
+| `listen` | ProcSocks 本地桥接监听地址 | `127.0.0.1:7891`；必须是回环地址 |
+| `upstream.host` | 上游 SOCKS5 主机名或 IP | 必填，可自由修改 |
+| `upstream.port` | 上游 SOCKS5 端口 | 必填，范围 1–65535 |
+| `upstream.username` / `password` | SOCKS5 用户名和密码 | 必须同时填写或同时省略；配置文件中为明文 |
+| `processPatterns` | 需要代理的可执行文件完整路径正则 | 透明模式下至少一项 |
+| `bypassPatterns` | 永不重定向的可执行文件完整路径正则 | 建议包含本程序和远程控制程序 |
+| `redirectorDir` | 三件原生组件所在目录 | `driver`；相对路径以配置文件目录为准 |
+| `driverName` | Windows 驱动服务名 | 当前后端必须为 `netfilter2` |
+| `sniffTimeoutMs` | 等待 SNI/Host 的时间 | `2000`，必须大于 0 |
+| `connectTimeoutMs` | 连接上游 SOCKS5 的超时 | `15000`，必须大于 0 |
+| `maxSniffBytes` | 最多检查的协议前缀字节数 | `65536`，范围 1024–1048576 |
+| `requireHostname` | 无法恢复域名时是否拒绝连接 | `true` |
+
+用于 Codex 的脱敏模板位于
+[`deploy/windows-codex.example.json`](deploy/windows-codex.example.json)。
+请将其中的 `RemoteControlClient.exe` 替换为实际远程控制程序名称。
+真实的 `procsocks.json` 及 `*.local.json` 已被 Git 忽略；不要提交真实代理
+密码、主机凭据或设备专用信息。
+
+完整的 Windows 安装、验证、更新和故障回退流程见
+[`deploy/README.md`](deploy/README.md)。
+
 #### 准备原生组件
 
 1. 获取已正确授权的 x64 NetFilter SDK 组件。当前锁定的适配器需要匹配
@@ -181,7 +228,7 @@ processes through an existing SOCKS5 proxy without enabling a system-wide proxy
 or TUN adapter. It is intended for unattended machines where a GUI proxy rule
 manager is inconvenient.
 
-The first version targets the concrete setup used on WinServer:
+The current version targets this workflow on Windows workstations and servers:
 
 ```text
 selected process
@@ -292,6 +339,54 @@ The output is `target\release\procsocks.exe`.
 Copy `config.example.json` to `procsocks.json`. The example intentionally
 targets only `curl.exe` so the complete route can be verified before adding
 long-running applications.
+
+The upstream SOCKS5 endpoint is not hard-coded. Change `upstream.host` and
+`upstream.port` to use any other address or port. If the proxy requires
+authentication, set both `username` and `password`; otherwise set both to
+`null` or omit them:
+
+```json
+"upstream": {
+  "host": "127.0.0.1",
+  "port": 7890,
+  "username": null,
+  "password": null
+}
+```
+
+The service reads its configuration only at startup. After editing it, run:
+
+```powershell
+.\procsocks.exe service stop
+.\procsocks.exe --config .\procsocks.json check
+.\procsocks.exe service start
+```
+
+Configuration reference:
+
+| Field | Purpose | Default / constraint |
+| --- | --- | --- |
+| `listen` | Local ProcSocks bridge endpoint | `127.0.0.1:7891`; must be loopback |
+| `upstream.host` | Upstream SOCKS5 hostname or IP | Required and freely configurable |
+| `upstream.port` | Upstream SOCKS5 port | Required, range 1–65535 |
+| `upstream.username` / `password` | SOCKS5 credentials | Supply both or neither; stored as plaintext in the config |
+| `processPatterns` | Regex searches against full executable paths to route | At least one in transparent mode |
+| `bypassPatterns` | Regex searches against paths that must never be redirected | Include this program and remote-control clients |
+| `redirectorDir` | Directory containing the three native components | `driver`; relative to the config file |
+| `driverName` | Windows driver service name | Must currently be `netfilter2` |
+| `sniffTimeoutMs` | Time allowed to recover SNI/Host | `2000`; must be greater than zero |
+| `connectTimeoutMs` | Upstream SOCKS5 connection timeout | `15000`; must be greater than zero |
+| `maxSniffBytes` | Maximum protocol prefix to inspect | `65536`; range 1024–1048576 |
+| `requireHostname` | Reject a connection when no hostname can be recovered | `true` |
+
+A sanitized Codex template is available at
+[`deploy/windows-codex.example.json`](deploy/windows-codex.example.json).
+Replace `RemoteControlClient.exe` with the real remote-control executable name.
+Real `procsocks.json` and `*.local.json` files are ignored by Git; never commit
+real proxy passwords, host credentials, or device-specific information.
+
+See [`deploy/README.md`](deploy/README.md) for the complete Windows installation,
+verification, upgrade, and rollback procedure.
 
 #### Supply the native bundle
 
