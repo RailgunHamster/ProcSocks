@@ -1,0 +1,42 @@
+ProcSocks macOS 验收记录
+日期：2026-09-30 23:30:16，Asia/Shanghai
+系统：macOS 26.6.2，arm64
+构建：当前工作区的 release 二进制（未提交更改）
+二进制 SHA-256：e03b8789c21dac85078b32b8899b4f5f24d6af1d5af90aba7d6f2a780451e95d
+
+自动验证：
+  cargo fmt --check                                      PASS
+  cargo test --offline                                  PASS：59 单元 + 4 信号集成 + 3 watchdog 集成 = 66
+  cargo clippy --all-targets --locked --offline -- -D warnings  PASS
+  cargo check --all-targets --locked --offline --target x86_64-pc-windows-msvc  PASS
+  cargo clippy --all-targets --locked --offline --target x86_64-pc-windows-msvc -- -D warnings  PASS
+
+真实网络验证：
+  SOCKS bridge HTTP：HTTP 200
+  SOCKS bridge HTTPS：HTTP 200；启用证书校验与 TLS SNI
+  root 运行 scripts/verify-macos.sh：退出码 0
+  实际使用本机配置的上游；生成独立临时配置，只匹配 /usr/bin/curl。
+  IPv4 代理探针：https://api.ipify.org
+  IPv6 代理探针：https://api64.ipify.org
+  直连探针：http://example.com/
+
+[PASS] T1 普通用户经上游 SOCKS5：探针自身 PID 命中代理规则，HTTPS 成功，出口与显式上游一致
+[PASS] T2 root 出站被豁免                  root 的连接没进归属日志，且直连探针 HTTP 200
+[PASS] T3 回环目标不被拦截：显式上游 SOCKS5 请求成功，探针自身 PID 无归属记录
+[PASS] T4 不匹配进程走直连回退        1 条 decision=direct，探针 HTTP 200
+[PASS] T5 正常退出后 pf 还原             forwarding=0，无残留规则
+[PASS] T6 SIGKILL 后死人开关生效         rdr 从 6 降到 0
+[PASS] T7 IPv6 经上游 SOCKS5：IPv6 探针自身 PID 命中代理规则，HTTPS 成功
+
+恢复状态：
+  进入时 pf=Disabled，net.inet.ip.forwarding=0
+  SIGTERM：主进程正常返回，pf=Disabled，forwarding=0，pf enable 引用与基线一致
+  SIGKILL：只杀主进程；watchdog 自动还原，rdr 规则数从 6 降至 0
+           pf=Disabled，forwarding=0，pf enable 引用与基线一致
+  验收脚本未额外重载 pf 或强制复位 forwarding，避免掩盖程序清理失败。
+  原始本机配置未改动；出口地址和非探针进程日志不在本记录中。
+
+范围：
+  以上验证 macOS 按进程 TCP 透明代理；Windows 后端进行了交叉编译和静态检查。
+  UDP/QUIC 和 root 应用代理不在当前 TCP/pf 后端范围内。
+  退出时重载 /etc/pf.conf，不能保证恢复其他软件动态写入的自定义主规则集。

@@ -1,0 +1,9 @@
+/target
+/driver/
+procsocks.json
+*.local.json
+*.log
+Redirector.bin
+nfapi.dll
+nfdriver.sys
+netfilter2.sys

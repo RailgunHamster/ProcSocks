@@ -1,0 +1,109 @@
+
+===== ProcSocks macOS spike =====
+时间:       2026-09-26 01:17:53
+系统:       26.6.2 (arm64)
+目标:       http://example.com:80/
+重定向端口: 80
+监听:       127.0.0.1:7891
+测试用户:   rh
+
+===== 1. 记录原始状态 =====
+pf 状态:                  Disabled
+net.inet.ip.forwarding:  0
+
+===== 2. 基线测试（不经过任何代理） =====
+HTTP 状态码: 200 (curl 退出码 0)
+基线正常，可以继续。
+
+===== 3. 载入 pf 规则 =====
+
+已开启 net.inet.ip.forwarding=1
+规则载入成功，user 子句用的是: user { != root }
+pfctl 输出: pfctl: Use of -f option, could result in flushing of rules
+present in the main ruleset added by the system at startup.
+See /etc/pf.conf for further details.
+
+No ALTQ support in kernel
+ALTQ related functions disabled
+
+最终规则内容:
+    scrub-anchor "com.apple/*"
+    nat-anchor "com.apple/*"
+    rdr-anchor "com.apple/*"
+    dummynet-anchor "com.apple/*"
+
+    # ---- ProcSocks spike / translation 段（必须排在 filtering 之前）----
+    rdr pass proto tcp from any to any port { 80 } -> 127.0.0.1 port 7891
+
+    # ---- Apple 自带的 filtering anchors ----
+    anchor "com.apple/*"
+    load anchor "com.apple" from "/etc/pf.anchors/com.apple"
+
+    # ---- ProcSocks spike / filtering 段 ----
+    # 本机自己产生的流量，rdr 单独拦不住，要靠 route-to 把它踹到 lo0；
+    # user 子句让代理进程自己的出站连接豁免，从而不会死循环
+    pass out route-to (lo0 127.0.0.1) proto tcp from any to any port { 80 } user { != root }
+pfctl -E 输出: No ALTQ support in kernel ALTQ related functions disabled pf enabled Token : 12091457091560242419
+Token: 12091457091560242419
+
+===== 3b. pf 实际解析后的规则 =====
+--- rdr (pfctl -sn) ---
+No ALTQ support in kernel
+ALTQ related functions disabled
+nat-anchor "com.apple/*" all
+rdr-anchor "com.apple/*" all
+rdr pass inet proto tcp from any to any port = 80 -> 127.0.0.1 port 7891
+--- filter (pfctl -sr) ---
+No ALTQ support in kernel
+ALTQ related functions disabled
+scrub-anchor "com.apple/*" all fragment reassemble
+anchor "com.apple/*" all
+pass out route-to (lo0 127.0.0.1) inet proto tcp from any to any port = 80 user != 0 flags S/SA keep state
+
+===== 4. 启动监听器 =====
+监听器 pid=89794
+监听器已就绪（等待 0.1 秒）
+启动日志: [01:17:54] 监听器已启动 pid=89794 uid=0 gid=0, 绑定 127.0.0.1:7891
+
+===== 5. 测试 A —— 普通用户 (rh) 访问目标 =====
+HTTP 状态码:      200 (curl 退出码 0)
+被拦截的连接数:   1
+curl stderr:
+返回体大小:       559 字节
+
+===== 6. 测试 B —— root 访问目标（应当不被拦截） =====
+HTTP 状态码:      200 (curl 退出码 0)
+被拦截的连接数:   0   (期望 0)
+
+===== 7. pf 状态表快照 =====
+No ALTQ support in kernel
+ALTQ related functions disabled
+ALL tcp 192.168.72.242:60828 -> 104.20.23.154:80       FIN_WAIT_2:FIN_WAIT_2
+ALL tcp 127.0.0.1:7891 <- 104.20.23.154:80 <- 192.168.72.242:60828       FIN_WAIT_2:FIN_WAIT_2
+
+===== 7b. 监听器日志 =====
+[01:17:54] 监听器已启动 pid=89794 uid=0 gid=0, 绑定 127.0.0.1:7891
+[01:17:54] 连接 #1: 被拦截，来自 192.168.72.242:60828 (uid=0)
+[01:17:54] 连接 #1: 还原出原始目的地 -> 104.20.23.154:80
+[01:17:54] 连接 #1: 命中的状态行 -> ALL tcp 192.168.72.242:60828 -> 104.20.23.154:80       ESTABLISHED:ESTABLISHED
+[01:17:55] 连接 #1: 直连成功，开始双向转发
+[01:17:55] 连接 #1: 转发结束
+--- listener stderr ---
+
+===== 8. 结论 =====
+
+  [PASS] Q1 能否拦本机普通用户流量 拦到了 1 条连接
+  [PASS] Q2 能否还原原始目的地     还原出原始目的地 -> 104.20.23.154:80
+  [PASS] Q3 代理自身能否不回环     root 的 0 条连接被正确豁免，且访问成功
+  [PASS] Q4 端到端透传                 普通用户无感知拿到 200，559 字节
+
+把上面这份报告整个贴回来即可。
+
+===== 清理 =====
+已停止监听器 (pid=89794)
+已恢复主规则集 /etc/pf.conf
+已恢复 net.inet.ip.forwarding=0
+
+报告文件: /tmp/procsocks-spike/report.txt
+监听器日志: /tmp/procsocks-spike/listener.log
+如果网络异常，手工兜底:  sudo pfctl -d

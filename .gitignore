@@ -1,4 +1,6 @@
-/target
+.DS_Store
+# Existing Windows installations may keep local runtime files at the old root.
+/target/
 /driver/
 procsocks.json
 *.local.json

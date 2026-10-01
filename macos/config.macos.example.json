@@ -1,0 +1,24 @@
+{
+  "listen": "127.0.0.1:7891",
+  "upstream": {
+    "host": "127.0.0.1",
+    "port": 7890,
+    "username": null,
+    "password": null
+  },
+  "processPatterns": [
+    "/Applications/ChatGPT.app",
+    "codex"
+  ],
+  "bypassPatterns": [
+    "(^|/)procsocks$",
+    "/usr/bin/ssh",
+    "/usr/sbin/sshd"
+  ],
+  "redirectPorts": "all",
+  "redirectIpv6": true,
+  "sniffTimeoutMs": 2000,
+  "connectTimeoutMs": 15000,
+  "maxSniffBytes": 65536,
+  "requireHostname": true
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "bundles": [
+    {
+      "id": "netch-1.9.7-nfapi-1.5.1.7-driver-1.6.3.0-x64",
+      "architecture": "x86_64",
+      "source": {
+        "netchRelease": "1.9.7",
+        "netchArchiveSha256": "692aa6ddd20ed98cf9dd1c51c0495206c8ea3aeef9e9f50fb1de94eca28be5a8"
+      },
+      "components": [
+        {
+          "name": "Redirector.bin",
+          "fileVersion": null,
+          "size": 373760,
+          "sha256": "ef325b06656b68302ed90b7c76877a845df62c44182b59100d32e612cf7f514b"
+        },
+        {
+          "name": "nfapi.dll",
+          "fileVersion": "1.5.1.7",
+          "size": 389632,
+          "sha256": "f0519b24f076f52f12353d955ef89863963b5988130233673f2f4a4445e842cc"
+        },
+        {
+          "name": "nfdriver.sys",
+          "fileVersion": "1.6.3.0",
+          "size": 90672,
+          "sha256": "4af6f672119f4f13e33b8914630eedea97d299b5c92c2105a4015dd0ca6e933e"
+        }
+      ]
+    }
+  ]
+}
