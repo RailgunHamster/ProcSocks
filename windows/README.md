@@ -5,7 +5,7 @@
 ## 中文
 
 ProcSocks 是一个小型 Windows 命令行路由工具，可以只让指定进程的
-TCP 连接通过已有的 SOCKS5 代理，而不必开启系统全局代理或 TUN 网卡。
+TCP / UDP 通信通过已有的 SOCKS5 代理，而不必开启系统全局代理或 TUN 网卡。
 它主要面向不方便使用图形化分流工具的无人值守电脑和服务器。
 
 当前版本面向 Windows 工作站和服务器上的以下使用场景：
@@ -23,11 +23,11 @@ TCP 连接通过已有的 SOCKS5 代理，而不必开启系统全局代理或 T
 
 ### 功能范围
 
-- 仅处理 TCP `CONNECT` 流量。
+- 处理 TCP `CONNECT` 与 UDP `ASSOCIATE` 流量。
 - 按进程规则会对可执行文件完整路径进行正则搜索；例如 `codex.exe`
   可以匹配路径中包含该名称的程序。
 - 支持从 TLS ClientHello SNI、HTTP `Host` 和 `CONNECT` authority 恢复域名。
-- 严格模式下不会路由 UDP/QUIC、TLS Encrypted ClientHello，以及无法看到
+- TCP 严格模式下不会路由 TLS Encrypted ClientHello，以及无法看到
   主机名的协议。
 - 配置校验会强制本地监听地址使用回环地址。
 
@@ -247,7 +247,7 @@ IP address but the upstream SOCKS server requires a domain-name request.
 - Per-process rules are regular-expression searches against the full executable
   path. A simple rule such as `codex.exe` matches any path containing that name.
 - TLS ClientHello SNI and HTTP `Host`/`CONNECT` authority are supported.
-- UDP/QUIC, TLS Encrypted ClientHello, and protocols without a visible hostname
+- TLS Encrypted ClientHello and TCP protocols without a visible hostname
   are deliberately not routed in strict mode.
 - The local listener is restricted to a loopback address by validation.
 
@@ -459,3 +459,26 @@ and installs three delayed restart attempts for unexpected failures.
 
 This sequence avoids intercepting an active remote-control client while the
 bridge itself is still being tested.
+
+## UDP 支持
+
+`redirectUdp` 默认 `true`，目标进程的 UDP（含应用自有 DNS / QUIC）通过上游
+SOCKS5 UDP ASSOCIATE 转发；上游不支持时启动失败，不对已接管 UDP 自动直连。
+IPv4、IPv6 和域名 SOCKS 数据包头都支持，IPv6 目标仍需上游支持 IPv6 UDP。
+TCP 的 `requireHostname` 选项不作用于 UDP。
+
+旧 Netch 1.9.7 适配层会无条件绕过端口 53。完整 UDP 支持须使用 ProcSocks 修正过的
+适配层；核心会检查 `aio_process_udp_dns`，拒绝悄悄绕过 DNS 的旧适配层。
+内核驱动和 nfapi.dll 继续使用原先锁定的版本，不需要换驱动。
+
+从用户自行取得并获准使用的 Netch 1.9.7 源码构建（Visual Studio v143 C++ 工具链）：
+
+```powershell
+./scripts/build-udp-redirector.ps1 -NetchSource D:/git/Netch -OutputDirectory D:/git/procsocks-udp-build
+```
+
+将输出的 `Redirector.bin` 与锁定的 `nfapi.dll` / `nfdriver.sys` 放在同一目录，
+再使用 `procsocks driver import --from <目录>` 验证导入。新适配层的源码修改由脚本
+明确生成，原生组件摘要记录在 `native-components.lock.json`。构建产物不提交到 Git。
+如需维持旧适配层的 TCP 模式，可明确配置 `"redirectUdp": false`。
+系统 DNS 服务代发的请求仍按 DNS 服务进程本身的规则处理，不会修改全系统 DNS。

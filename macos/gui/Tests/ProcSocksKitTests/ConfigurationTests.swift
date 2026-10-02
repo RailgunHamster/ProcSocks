@@ -3,6 +3,17 @@ import XCTest
 @testable import ProcSocksKit
 
 final class ConfigurationTests: XCTestCase {
+    func testUDPDefaultsOnAndCanBeDisabledWithoutLosingAdvancedRules() throws {
+        let data = Data(#"{"upstream":{"host":"127.0.0.1","port":7890},"processPatterns":["complex.*rule"],"custom":42}"#.utf8)
+        var configuration = try UserConfiguration(data: data)
+        XCTAssertTrue(configuration.redirectUDP)
+        configuration.redirectUDP = false
+        let encoded = try configuration.encoded()
+        let restored = try UserConfiguration(data: encoded)
+        XCTAssertFalse(restored.redirectUDP)
+        XCTAssertEqual(restored.advancedProcessRules, "complex.*rule")
+    }
+
     func testApplicationRuleIncludesHelpersAndEscapesRegexCharacters() throws {
         let target = ProcessSelection(kind: .application, path: "/Applications/Foo [Work]+.app", name: "Foo")
         let regex = try NSRegularExpression(pattern: target.pattern)

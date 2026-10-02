@@ -36,6 +36,7 @@ const PROC_PIDLISTFDS: i32 = 1;
 const PROC_PIDFDSOCKETINFO: i32 = 3;
 const PROX_FDTYPE_SOCKET: u32 = 2;
 const SOCKINFO_TCP: i32 = 2;
+const SOCKINFO_IN: i32 = 1;
 const PROC_PIDPATHINFO_MAXSIZE: u32 = 4096;
 
 const AF_INET: i32 = 2;
@@ -70,7 +71,10 @@ impl In4In6Addr {
                 let mut octets = [0u8; 16];
                 octets[..12].copy_from_slice(&self._pad);
                 octets[12..].copy_from_slice(&self.addr4);
-                Some(IpAddr::V6(Ipv6Addr::from(octets)))
+                Some(match Ipv6Addr::from(octets).to_ipv4_mapped() {
+                    Some(ip) => IpAddr::V4(ip),
+                    None => IpAddr::V6(Ipv6Addr::from(octets)),
+                })
             }
             _ => None,
         }
@@ -84,7 +88,10 @@ impl In4In6Addr {
 struct InSockInfo {
     insi_fport: i32,        // 偏移 0
     insi_lport: i32,        // 偏移 4
-    _gap0: [u8; 24],        // 8..32：gencnt 与 v4/v6 选项区
+    insi_gencnt: u64,       // offset 8: stable socket generation
+    _options: [u8; 8],      // offset 16
+    insi_vflag: u8,         // offset 24: INI_IPV4 / INI_IPV6 (dual stack: both)
+    _gap1: [u8; 7],         // 25..32
     insi_faddr: In4In6Addr, // 偏移 32
     insi_laddr: In4In6Addr, // 偏移 48
     _tail: [u8; 16],        // 64..80
@@ -160,6 +167,8 @@ const _: () = {
     assert!(size_of::<InSockInfo>() == 80);
     assert!(offset_of!(InSockInfo, insi_fport) == 0);
     assert!(offset_of!(InSockInfo, insi_lport) == 4);
+    assert!(offset_of!(InSockInfo, insi_gencnt) == 8);
+    assert!(offset_of!(InSockInfo, insi_vflag) == 24);
     assert!(offset_of!(InSockInfo, insi_faddr) == 32);
     assert!(offset_of!(InSockInfo, insi_laddr) == 48);
 
@@ -193,6 +202,7 @@ pub struct ConnectionOwner {
     pub foreign: Option<(IpAddr, u16)>,
     /// TCP 状态（macOS 的 `TCPS_*`，4 = ESTABLISHED）。
     pub state: i32,
+    pub socket_generation: u64,
 }
 
 /// Read-only process inventory; UID filtering keeps root services out of the
@@ -291,11 +301,60 @@ pub fn owner_of_local_endpoint(
         if pid <= 0 {
             continue;
         }
-        if let Some(owner) = owner_in_process(pid, local_port, local_address, &mut scratch)? {
+        if let Some(owner) = owner_in_process(pid, local_port, local_address, None, &mut scratch)? {
             return Ok(Some(owner));
         }
     }
     Ok(None)
+}
+
+/// Match connected and unconnected UDP, including wildcard-bound sockets.
+/// More than one owning process means SO_REUSEPORT/shared FD ambiguity: drop.
+pub fn owner_of_udp_endpoint(
+    source: std::net::SocketAddr,
+    destination: std::net::SocketAddr,
+) -> Result<Option<ConnectionOwner>> {
+    let mut scratch = Scratch::default();
+    list_all_pids(&mut scratch.pids)?;
+    let mut found = None;
+    for index in 0..scratch.pids.len() {
+        let pid = scratch.pids[index];
+        if pid <= 0 {
+            continue;
+        }
+        if let Some(owner) = owner_in_process(
+            pid,
+            source.port(),
+            Some(source.ip()),
+            Some(destination),
+            &mut scratch,
+        )? {
+            if found.is_some() {
+                return Ok(None);
+            }
+            found = Some(owner);
+        }
+    }
+    Ok(found)
+}
+
+pub fn process_owns_udp_endpoint(
+    pid: i32,
+    source: std::net::SocketAddr,
+    destination: std::net::SocketAddr,
+    generation: u64,
+    executable: &str,
+) -> Result<bool> {
+    Ok(owner_in_process(
+        pid,
+        source.port(),
+        Some(source.ip()),
+        Some(destination),
+        &mut Scratch::default(),
+    )?
+    .is_some_and(|owner| {
+        owner.socket_generation == generation && owner.executable_str() == executable
+    }))
 }
 
 /// 一轮查询里可以反复使用的缓冲区集合。
@@ -344,6 +403,7 @@ fn owner_in_process(
     pid: i32,
     local_port: u16,
     local_address: Option<IpAddr>,
+    udp_destination: Option<std::net::SocketAddr>,
     scratch: &mut Scratch,
 ) -> Result<Option<ConnectionOwner>> {
     let needed = unsafe { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
@@ -396,7 +456,11 @@ fn owner_in_process(
         }
         let info = unsafe { info.assume_init() };
 
-        if info.psi.soi_kind != SOCKINFO_TCP {
+        if udp_destination.is_some() {
+            if info.psi.soi_kind != SOCKINFO_IN || info.psi._soi_protocol != libc::IPPROTO_UDP {
+                continue;
+            }
+        } else if info.psi.soi_kind != SOCKINFO_TCP {
             continue;
         }
         let family = info.psi.soi_family;
@@ -408,6 +472,19 @@ fn owner_in_process(
             unsafe { std::ptr::read_unaligned(info.psi.soi_proto.as_ptr().cast::<TcpSockInfo>()) };
 
         // 端口字段是网络字节序（已由 spike 实测确认），必须 ntohs。
+        let family = if let (Some(_), Some(local)) = (udp_destination, local_address) {
+            let (flag, family) = if local.is_ipv4() {
+                (1, AF_INET)
+            } else {
+                (2, AF_INET6)
+            };
+            if tcp.tcpsi_ini.insi_vflag & flag == 0 {
+                continue;
+            }
+            family
+        } else {
+            family
+        };
         let lport = u16::from_be(tcp.tcpsi_ini.insi_lport as u16);
         if lport != local_port {
             continue;
@@ -418,6 +495,7 @@ fn owner_in_process(
         // 地址也要对上：同端口不同本地地址是完全合法的两回事。
         if let (Some(wanted), Some(actual)) = (local_address, local_ip)
             && wanted != actual
+            && !(udp_destination.is_some() && actual.is_unspecified())
         {
             continue;
         }
@@ -425,6 +503,14 @@ fn owner_in_process(
         let local = local_ip.map(|ip| (ip, lport));
         let foreign = tcp.tcpsi_ini.insi_faddr.to_ip(family).map(|ip| (ip, fport));
 
+        if let Some(destination) = udp_destination
+            && let Some((ip, port)) = foreign
+            && destination.port() != 0
+            && port != 0
+            && (ip != destination.ip() || port != destination.port())
+        {
+            continue;
+        }
         let executable = executable_path(pid, &mut scratch.path)?;
 
         return Ok(Some(ConnectionOwner {
@@ -432,7 +518,12 @@ fn owner_in_process(
             executable,
             local,
             foreign,
-            state: tcp.tcpsi_state,
+            socket_generation: tcp.tcpsi_ini.insi_gencnt,
+            state: if udp_destination.is_some() {
+                0
+            } else {
+                tcp.tcpsi_state
+            },
         }));
     }
 
@@ -518,6 +609,38 @@ fn process_count() -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attributes_connected_and_unconnected_udp_including_wildcard_bind() {
+        for listen in ["127.0.0.1:0", "0.0.0.0:0", "[::1]:0", "[::]:0"] {
+            let socket = std::net::UdpSocket::bind(listen).unwrap();
+            let ipv4 = socket.local_addr().unwrap().is_ipv4();
+            let destination: std::net::SocketAddr = if ipv4 {
+                "127.0.0.1:51432"
+            } else {
+                "[::1]:51432"
+            }
+            .parse()
+            .unwrap();
+            let source =
+                std::net::SocketAddr::new(destination.ip(), socket.local_addr().unwrap().port());
+            let owner = owner_of_udp_endpoint(source, destination).unwrap().unwrap();
+            assert_eq!(owner.pid, std::process::id() as i32);
+            socket.connect(destination).unwrap();
+            assert_eq!(
+                owner_of_udp_endpoint(source, destination)
+                    .unwrap()
+                    .unwrap_or_else(|| panic!(
+                        "connected UDP lookup failed for {listen}: {source} -> {destination}"
+                    ))
+                    .pid,
+                owner.pid
+            );
+            let mut wrong = destination;
+            wrong.set_port(51433);
+            assert!(owner_of_udp_endpoint(source, wrong).unwrap().is_none());
+        }
+    }
 
     /// 拿一个真实存在的 TCP 连接做自检：在本进程内连出去，
     /// 然后用它的本地端点反查，必须查到我们自己。

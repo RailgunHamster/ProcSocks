@@ -116,6 +116,9 @@ fn run_service_worker(
     runtime.block_on(async move {
         // Bind before enabling interception so a port error cannot strand process rules.
         let bridge = Bridge::bind(std::sync::Arc::clone(&config)).await?;
+        if config.redirect_udp {
+            drop(crate::udp::Association::connect(&config).await?);
+        }
         let redirector = RedirectorGuard::start(&config)?;
         set_status(
             status_handle,
@@ -126,7 +129,7 @@ fn run_service_worker(
         )?;
         info!(
             process_patterns = ?config.process_patterns,
-            "service enabled per-process TCP redirection"
+            "service enabled per-process TCP/UDP redirection"
         );
 
         let bridge_result = tokio::select! {

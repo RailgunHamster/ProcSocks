@@ -75,12 +75,16 @@ pub(crate) struct Target {
 
 async fn handle_client(mut client: TcpStream, config: Arc<Config>, id: u64) -> Result<()> {
     client.set_nodelay(true)?;
-    let original = timeout(
+    let (original, command) = timeout(
         Duration::from_millis(config.connect_timeout_ms),
-        accept_socks5_request(&mut client),
+        accept_socks_request(&mut client),
     )
     .await
     .context("timed out accepting the client SOCKS5 request")??;
+
+    if command == 3 {
+        return crate::udp::serve(client, original, config).await;
+    }
 
     // The redirector cannot release the application's first bytes until it sees a
     // successful SOCKS reply. Reply optimistically, then recover the real hostname
@@ -163,7 +167,17 @@ pub(crate) async fn relay_through_upstream(
     Ok(())
 }
 
+#[cfg(test)]
 async fn accept_socks5_request(stream: &mut TcpStream) -> Result<Target> {
+    let (target, command) = accept_socks_request(stream).await?;
+    if command != 1 {
+        send_socks5_reply(stream, 7).await?;
+        bail!("expected CONNECT");
+    }
+    Ok(target)
+}
+
+async fn accept_socks_request(stream: &mut TcpStream) -> Result<(Target, u8)> {
     let version = stream.read_u8().await?;
     if version != 0x05 {
         bail!("unsupported SOCKS version {version}");
@@ -184,9 +198,9 @@ async fn accept_socks5_request(stream: &mut TcpStream) -> Result<Target> {
     if request_version != 0x05 || reserved != 0x00 {
         bail!("invalid SOCKS5 request header");
     }
-    if command != 0x01 {
+    if command != 0x01 && command != 0x03 {
         send_socks5_reply(stream, 0x07).await?;
-        bail!("only SOCKS5 CONNECT is supported");
+        bail!("only SOCKS5 CONNECT and UDP ASSOCIATE are supported");
     }
 
     let address = match address_type {
@@ -217,14 +231,14 @@ async fn accept_socks5_request(stream: &mut TcpStream) -> Result<Target> {
         }
     };
     let port = stream.read_u16().await?;
-    if port == 0 {
+    if port == 0 && command == 1 {
         send_socks5_reply(stream, 0x01).await?;
         bail!("SOCKS5 target port must not be zero");
     }
-    Ok(Target { address, port })
+    Ok((Target { address, port }, command))
 }
 
-async fn send_socks5_reply(stream: &mut TcpStream, reply: u8) -> Result<()> {
+pub(crate) async fn send_socks5_reply(stream: &mut TcpStream, reply: u8) -> Result<()> {
     stream
         .write_all(&[0x05, reply, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
         .await?;
@@ -341,7 +355,7 @@ async fn connect_upstream_inner(config: &Config, target: &Target) -> Result<TcpS
     Ok(stream)
 }
 
-async fn authenticate_upstream(config: &Config, stream: &mut TcpStream) -> Result<()> {
+pub(crate) async fn authenticate_upstream(config: &Config, stream: &mut TcpStream) -> Result<()> {
     let username = config
         .upstream
         .username

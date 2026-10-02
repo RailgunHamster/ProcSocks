@@ -87,6 +87,60 @@ final class DirectTLSProbe: @unchecked Sendable {
     }
 }
 
+final class DirectUDPProbe: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.procsocks.udp-test")
+    private let target: String
+    private let connection: NWConnection
+    private let start = Date()
+    private let identifier = UInt16.random(in: 1...UInt16.max)
+    private var completion: ((ProbeResult) -> Void)?
+
+    init(_ target: String) {
+        self.target = target
+        let parameters = NWParameters.udp
+        parameters.preferNoProxies = true
+        connection = NWConnection(host: NWEndpoint.Host(target), port: 53, using: parameters)
+    }
+
+    func run(_ completion: @escaping (ProbeResult) -> Void) {
+        queue.async { self.completion = completion }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                var query = Data([UInt8(self.identifier >> 8), UInt8(self.identifier & 255), 1, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+                query.append(contentsOf: [7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1])
+                self.connection.send(content: query, completion: .contentProcessed { error in
+                    if let error { self.finish(error.debugDescription) }
+                    else {
+                        self.connection.receiveMessage { data, _, _, error in
+                            if let error { self.finish(error.debugDescription); return }
+                            guard let data, data.count >= 12,
+                                  data[0] == UInt8(self.identifier >> 8), data[1] == UInt8(self.identifier & 255),
+                                  data[2] & 0x80 != 0, data[3] & 15 == 0 else {
+                                self.finish("UDP DNS 返回数据不正确"); return
+                            }
+                            self.finish(nil, bytes: data.count)
+                        }
+                    }
+                })
+            case .failed(let error): self.finish(error.debugDescription)
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 10) { self.finish("UDP 请求超时；IPv6 还需要上游支持 IPv6 UDP") }
+    }
+
+    private func finish(_ error: String?, bytes: Int = 0) {
+        guard let callback = completion else { return }
+        completion = nil
+        callback(ProbeResult(stack: "Network.framework · direct UDP socket", url: "udp://\(target):53 · example.com DNS", pid: getpid(),
+                             status: nil, bytes: bytes, milliseconds: Int(Date().timeIntervalSince(start) * 1000), error: error,
+                             networkProtocol: "udp", usedExplicitProxy: false, remoteAddress: target))
+        connection.cancel()
+    }
+}
+
 final class Metrics: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var collected: URLSessionTaskMetrics?
@@ -118,6 +172,14 @@ final class NetworkTester: ObservableObject {
                     group.addTask { await Self.fetch(target) }
                     group.addTask {
                         let probe = DirectTLSProbe(target)
+                        return await withCheckedContinuation { continuation in
+                            probe.run { result in continuation.resume(returning: result) }
+                        }
+                    }
+                }
+                for target in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
+                    group.addTask {
+                        let probe = DirectUDPProbe(target)
                         return await withCheckedContinuation { continuation in
                             probe.run { result in continuation.resume(returning: result) }
                         }
@@ -169,10 +231,10 @@ struct TestView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("原生网络测试").font(.largeTitle.bold())
             Text("先在 ProcSocks 中勾选 ProcSocks Network Test，再启用代理并运行测试。")
-            Text("分别测试直接 TCP/TLS 连接与 URLSession 请求，并显示是否使用了系统代理。403 或 404 表示已收到网站响应；超时或 TLS 错误才是连接失败。")
+            Text("分别测试直接 TCP/TLS、IPv4 / IPv6 UDP 与 URLSession 请求，并显示是否使用了系统代理。403 或 404 表示已收到网站响应；超时或 TLS 错误才是连接失败。")
                 .font(.callout).foregroundStyle(.secondary)
             HStack {
-                Button(tester.running ? "正在测试…" : "运行 HTTPS 测试") { tester.run() }
+                Button(tester.running ? "正在测试…" : "运行网络测试") { tester.run() }
                     .buttonStyle(.borderedProminent).disabled(tester.running)
                 if tester.running { ProgressView().controlSize(.small) }
                 Spacer()
@@ -185,7 +247,7 @@ struct TestView: View {
                             Text(result.url).font(.headline)
                             Text(result.stack).font(.caption).foregroundStyle(.secondary)
                             if let error = result.error { Text(error).foregroundStyle(.red) }
-                            else { Text("HTTP \(result.status ?? 0) · \(result.bytes) 字节 · \(result.milliseconds) ms").foregroundStyle(.green) }
+                            else { Text("\(result.networkProtocol == "udp" ? "UDP 往返成功" : "HTTP \(result.status ?? 0)") · \(result.bytes) 字节 · \(result.milliseconds) ms").foregroundStyle(.green) }
                             Text("协议 \(result.networkProtocol ?? "未知") · 显式代理 \(result.usedExplicitProxy.map { $0 ? "是" : "否" } ?? "未知") · 地址 \(result.remoteAddress ?? "未知")")
                                 .font(.caption.monospaced()).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)

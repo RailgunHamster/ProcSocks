@@ -55,13 +55,24 @@ impl RedirectorGuard {
         let dial = unsafe { *library.get::<AioDial>(b"aio_dial\0")? };
         let init = unsafe { *library.get::<AioInit>(b"aio_init\0")? };
         let free = unsafe { *library.get::<AioFree>(b"aio_free\0")? };
+        if config.redirect_udp {
+            let capability = unsafe { library.get::<AioInit>(b"aio_process_udp_dns\0") }
+                .context("UDP requires the ProcSocks adapter with per-process DNS support; build/import the locked UDP adapter (scripts/build-udp-redirector.ps1)")?;
+            if unsafe { capability() } == 0 {
+                bail!("the adapter does not support per-process UDP DNS");
+            }
+        }
 
         set(dial, AIO_FILTER_LOOPBACK, "false")?;
         set(dial, AIO_FILTER_INTRANET, "false")?;
         set(dial, AIO_FILTER_PARENT, "false")?;
         set(dial, AIO_FILTER_ICMP, "false")?;
         set(dial, AIO_FILTER_TCP, "true")?;
-        set(dial, AIO_FILTER_UDP, "false")?;
+        set(
+            dial,
+            AIO_FILTER_UDP,
+            if config.redirect_udp { "true" } else { "false" },
+        )?;
         set(dial, AIO_FILTER_DNS, "false")?;
         set(dial, AIO_DNS_ONLY, "false")?;
         set(dial, AIO_DNS_PROXY, "false")?;

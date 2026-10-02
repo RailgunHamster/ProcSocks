@@ -124,7 +124,7 @@ struct TrafficView: View {
             }.background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
             if let error = traffic.failure { Text(error).font(.caption).foregroundStyle(.red) }
             if traffic.needsBackendUpdate { Button("更新代理后台", action: updateBackend) }
-            Text("仅统计经 ProcSocks 上游代理实际转发的 TCP 字节，包含 TLS 数据；不含直连回退、UDP、SOCKS 握手及 TCP/IP 包头。累计从打开界面、重置统计或后台重启后开始。").font(.caption).foregroundStyle(.secondary)
+            Text("仅统计经 ProcSocks 上游代理实际转发的 TCP / UDP 数据字节，包含 TLS / QUIC 数据；不含直连回退、SOCKS 握手及 IP / UDP / TCP 包头。累计从打开界面、重置统计或后台重启后开始。").font(.caption).foregroundStyle(.secondary)
         }.padding(.horizontal, 24).padding(.bottom, 20)
             .onChange(of: selectedOnly) { _ in selectedPID = nil }
             .onChange(of: search) { _ in selectedPID = nil }

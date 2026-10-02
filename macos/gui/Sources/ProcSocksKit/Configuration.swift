@@ -54,6 +54,7 @@ public struct UserConfiguration {
     public var listenPort: String
     public var redirectPorts: String
     public var redirectIPv6: Bool
+    public var redirectUDP: Bool
     public var requireHostname: Bool
     public var connectTimeout: String
     public var sniffTimeout: String
@@ -84,6 +85,7 @@ public struct UserConfiguration {
         }
         redirectPorts = object["redirectPorts"] as? String ?? "all"
         redirectIPv6 = object["redirectIpv6"] as? Bool ?? true
+        redirectUDP = object["redirectUdp"] as? Bool ?? true
         requireHostname = object["requireHostname"] as? Bool ?? true
         connectTimeout = Self.number(object["connectTimeoutMs"], fallback: "15000")
         sniffTimeout = Self.number(object["sniffTimeoutMs"], fallback: "2000")
@@ -157,6 +159,7 @@ public struct UserConfiguration {
         object["bypassPatterns"] = Self.ruleLines(bypassRules)
         object["redirectPorts"] = redirectPorts.trimmingCharacters(in: .whitespacesAndNewlines)
         object["redirectIpv6"] = redirectIPv6
+        object["redirectUdp"] = redirectUDP
         object["requireHostname"] = requireHostname
         object["connectTimeoutMs"] = try Self.positiveInteger(connectTimeout, label: "连接超时")
         object["sniffTimeoutMs"] = try Self.positiveInteger(sniffTimeout, label: "嗅探超时")

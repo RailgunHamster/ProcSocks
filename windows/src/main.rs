@@ -9,6 +9,8 @@ mod native;
 mod redirector;
 mod service;
 mod sniff;
+#[path = "../../shared/udp.rs"]
+mod udp;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -39,7 +41,7 @@ enum Command {
     Example,
     /// Run only the SOCKS hostname-recovery bridge.
     Bridge,
-    /// Run the bridge and enable per-process TCP redirection.
+    /// Run the bridge and enable per-process TCP/UDP redirection.
     Run,
     /// Inspect or install the packet redirector driver.
     Driver {
@@ -126,10 +128,13 @@ async fn main() -> Result<()> {
 
             // Bind first. If the port is unavailable, no interception rule is enabled.
             let bridge = Bridge::bind(Arc::clone(&config)).await?;
+            if config.redirect_udp {
+                drop(udp::Association::connect(&config).await?);
+            }
             let _redirector = RedirectorGuard::start(&config)?;
             info!(
                 process_patterns = ?config.process_patterns,
-                "per-process TCP redirection enabled"
+                "per-process TCP/UDP redirection enabled"
             );
             run_until_shutdown(bridge).await?;
         }

@@ -14,6 +14,8 @@ mod bridge;
 mod config;
 mod sniff;
 mod traffic;
+#[path = "../../shared/udp.rs"]
+mod udp;
 
 /// 进程规则匹配只在 macOS 后端用得到：Windows 那边规则是交给 NetFilter 驱动
 /// 内部求值的，Rust 侧不再重复实现一遍。放这里条件编译，免得 Windows 构建里
@@ -38,6 +40,8 @@ mod libproc;
 mod pf;
 #[cfg(target_os = "macos")]
 mod pf_bridge;
+#[cfg(target_os = "macos")]
+mod udp_tun;
 
 use std::{future::Future, io::IsTerminal, path::PathBuf, sync::Arc};
 
@@ -66,7 +70,7 @@ enum Command {
     Example,
     /// Run only the SOCKS hostname-recovery bridge.
     Bridge,
-    /// Run the bridge and enable per-process TCP redirection.
+    /// Run the bridge and enable per-process TCP/UDP redirection.
     Run,
     /// Inspect or install the packet redirector backend.
     Driver {
@@ -230,6 +234,10 @@ async fn main() -> Result<()> {
                 let config = Config::load(&cli.config)?;
                 let elapsed = bridge::probe_upstream(&config).await?;
                 println!("SOCKS5 CONNECT example.com:443 succeeded in {elapsed} ms");
+                if config.redirect_udp {
+                    udp::probe(&config).await?;
+                    println!("SOCKS5 UDP ASSOCIATE and DNS datagram roundtrip succeeded");
+                }
             }
         },
         Command::Example => {
@@ -249,6 +257,7 @@ async fn main() -> Result<()> {
             println!("redirect ports: {}", config.redirect_ports);
             #[cfg(target_os = "macos")]
             println!("redirect IPv6: {}", config.redirect_ipv6);
+            println!("redirect UDP: {}", config.redirect_udp);
             config.validate_redirector()?;
 
             #[cfg(windows)]
@@ -292,10 +301,13 @@ async fn main() -> Result<()> {
             {
                 // Bind first. If the port is unavailable, no interception rule is enabled.
                 let bridge = bridge::Bridge::bind(Arc::clone(&config)).await?;
+                if config.redirect_udp {
+                    drop(udp::Association::connect(&config).await?);
+                }
                 let _redirector = redirector::RedirectorGuard::start(&config)?;
                 info!(
                     process_patterns = ?config.process_patterns,
-                    "per-process TCP redirection enabled"
+                    "per-process TCP/UDP redirection enabled"
                 );
                 run_until_shutdown(bridge.run()).await?;
             }
@@ -312,12 +324,30 @@ async fn main() -> Result<()> {
                         .map(|publisher| Arc::clone(&publisher.ledger)),
                 )
                 .await?;
-                let _guard = pf::PfGuard::start(&config)?;
+                let udp = if config.redirect_udp {
+                    Some(
+                        udp_tun::UdpBridge::bind(
+                            Arc::clone(&config),
+                            traffic
+                                .as_ref()
+                                .map(|publisher| Arc::clone(&publisher.ledger)),
+                        )
+                        .await?,
+                    )
+                } else {
+                    None
+                };
+                let _guard =
+                    pf::PfGuard::start(&config, udp.as_ref().map(|udp| udp.tunnel.name.as_str()))?;
                 info!(
                     process_patterns = ?config.process_patterns,
-                    "per-process TCP redirection enabled"
+                    "per-process TCP/UDP redirection enabled"
                 );
-                run_until_shutdown(bridge.run()).await?;
+                run_until_shutdown(async {
+                    if let Some(udp) = udp {
+                        tokio::select! { result = bridge.run() => result, result = udp.run() => result }
+                    } else { bridge.run().await }
+                }).await?;
             }
         }
 

@@ -79,6 +79,7 @@ pub const PFCTL_PATH: &str = PFCTL;
 const SYSCTL: &str = "/usr/sbin/sysctl";
 const PF_CONF: &str = "/etc/pf.conf";
 const SYSCTL_FORWARDING: &str = "net.inet.ip.forwarding";
+const SYSCTL_FORWARDING6: &str = "net.inet6.ip6.forwarding";
 
 /// 代理进程用来在 pf 里豁免自己的用户名。代理必须以 root 运行（既要 pfctl 也要
 /// libproc 读别的进程），所以这里就是 `root`。
@@ -107,6 +108,17 @@ pub fn ipv6_listen_address(config: &Config) -> Option<std::net::SocketAddr> {
 /// macOS 的 `rdr` 规则必须位于被求值的主规则集中，因此复制 Apple 的默认
 /// anchor 声明并插入重定向规则，退出时用 `pfctl -f /etc/pf.conf` 还原。
 pub fn generate_ruleset(config: &Config) -> String {
+    generate_ruleset_with_udp(
+        config,
+        if config.redirect_udp {
+            Some("utun0")
+        } else {
+            None
+        },
+    )
+}
+
+fn generate_ruleset_with_udp(config: &Config, interface: Option<&str>) -> String {
     let listen = config.listen;
     let port_clause = match config.redirect_ports {
         RedirectPorts::All => String::new(),
@@ -138,12 +150,31 @@ pub fn generate_ruleset(config: &Config) -> String {
         None => String::new(),
     };
 
+    let udp_filtering = match interface {
+        Some(interface) if config.redirect_udp => {
+            let mut rules = format!(
+                "# Only this root-owned utun can mark reinjected packets. Preserve direct UDP source ports.\n\
+                 pass in quick on {interface} proto udp tag procsocks_udp_reinject no state\n\
+                 pass out quick proto udp tagged procsocks_udp_reinject no state\n\
+                 pass out quick route-to ({interface} 127.0.0.1) inet proto udp from any to ! <procsocks_udp_excluded4>{port_clause} user != {PROXY_USER} no state\n"
+            );
+            if config.redirect_ipv6 {
+                rules.push_str(&format!("pass out quick route-to ({interface} ::1) inet6 proto udp from any to ! <procsocks_udp_excluded6>{port_clause} user != {PROXY_USER} no state\n"));
+            }
+            rules
+        }
+        _ => String::new(),
+    };
+
     format!(
         "\
 #
 # ProcSocks 临时主规则集 —— 由 procsocks 生成，进程退出时会被还原
 # 不要在 /etc/pf.conf 里引用它
 #
+# IPv4 loopback, multicast and limited broadcast; IPv6 loopback/multicast/link-local.
+table <procsocks_udp_excluded4> const {{ 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255 }}
+table <procsocks_udp_excluded6> const {{ ::1, ff00::/8, fe80::/10 }}
 # ---- normalization ----
 scrub-anchor \"com.apple/*\"
 
@@ -159,7 +190,7 @@ dummynet-anchor \"com.apple/*\"
 rdr pass on lo0 inet proto tcp from any to ! 127.0.0.0/8{port_clause} -> {listen_ip} port {listen_port}
 {ipv6_translation}
 # ---- filtering ----
-anchor \"com.apple/*\"
+{udp_filtering}anchor \"com.apple/*\"
 load anchor \"com.apple\" from \"/etc/pf.anchors/com.apple\"
 
 # 本机自己产生的流量要靠 route-to 才会被送到 lo0；user 子句豁免代理自身，防死循环。
@@ -266,6 +297,8 @@ pub struct PfState {
     pub pf_was_enabled: bool,
     /// `net.inet.ip.forwarding` 的原始值。
     pub forwarding_before: i32,
+    #[serde(default)]
+    pub forwarding6_before: Option<i32>,
     /// `pfctl -E` 返回的引用计数令牌，用 `-X` 释放。
     pub pf_token: Option<String>,
 }
@@ -318,6 +351,13 @@ pub fn restore(state: &PfState) -> Result<()> {
         errors.push(error.to_string());
     }
 
+    if let Some(before) = state.forwarding6_before {
+        let policy = format!("{SYSCTL_FORWARDING6}={before}");
+        if let Err(error) = run(SYSCTL, &["-w", policy.as_str()]) {
+            errors.push(error.to_string());
+        }
+    }
+
     // 5. 清掉临时规则集文件。
     if errors.is_empty() {
         let _ = fs::remove_file(ruleset_path());
@@ -360,7 +400,19 @@ pub fn validate_ruleset(config: &Config) -> Result<()> {
         .stdin
         .take()
         .context("pfctl stdin is unavailable")?
-        .write_all(generate_ruleset(config).as_bytes());
+        // lo0 always exists. The real utun is allocated only during start;
+        // dry-run validation must also work on Macs with no other VPN active.
+        .write_all(
+            generate_ruleset_with_udp(
+                config,
+                if config.redirect_udp {
+                    Some("lo0")
+                } else {
+                    None
+                },
+            )
+            .as_bytes(),
+        );
     let output = child
         .wait_with_output()
         .context("failed to wait for pfctl")?;
@@ -373,7 +425,7 @@ pub fn validate_ruleset(config: &Config) -> Result<()> {
 impl PfGuard {
     /// 载入重定向规则。调用前监听器必须**已经 bind 成功**——否则一旦规则生效
     /// 而没人接客，整机 TCP 会全部失败。
-    pub fn start(config: &Config) -> Result<Self> {
+    pub fn start(config: &Config, udp_interface: Option<&str>) -> Result<Self> {
         config.validate_redirector()?;
 
         if !is_root() {
@@ -400,7 +452,7 @@ impl PfGuard {
         fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
             .with_context(|| format!("failed to lock down {RUNTIME_DIR}"))?;
         let path = ruleset_path();
-        fs::write(&path, generate_ruleset(config))
+        fs::write(&path, generate_ruleset_with_udp(config, udp_interface))
             .with_context(|| format!("failed to write {}", path.display()))?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .with_context(|| format!("failed to lock down {}", path.display()))?;
@@ -408,6 +460,9 @@ impl PfGuard {
         // 打开 ip forwarding：本机自己发出的包要能被 route-to 引到 lo0。
         let forwarding_on = format!("{SYSCTL_FORWARDING}=1");
         run(SYSCTL, &["-w", forwarding_on.as_str()])?;
+        if config.redirect_udp && config.redirect_ipv6 {
+            run(SYSCTL, &["-w", &format!("{SYSCTL_FORWARDING6}=1")])?;
+        }
 
         // 载入主规则集。
         let ruleset = path.to_string_lossy().into_owned();
@@ -579,6 +634,7 @@ pub fn run_watchdog(state_json: Option<&str>, dry_run: bool) -> Result<()> {
         let mut state = PfState {
             pf_was_enabled: pf_enabled()?,
             forwarding_before: forwarding()?,
+            forwarding6_before: Some(run(SYSCTL, &["-n", SYSCTL_FORWARDING6])?.trim().parse()?),
             pf_token: None,
         };
         let armed = (|| -> Result<()> {
@@ -796,6 +852,7 @@ mod tests {
         let state = PfState {
             pf_was_enabled: false,
             forwarding_before: 0,
+            forwarding6_before: Some(0),
             pf_token: Some("12345".to_string()),
         };
         let json = serde_json::to_string(&state).unwrap();

@@ -15,6 +15,12 @@ pub(crate) struct TransferCounters {
     pub downloaded: AtomicU64,
 }
 
+pub(crate) fn record_bytes(counter: &AtomicU64, bytes: usize) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(value.saturating_add(bytes as u64))
+    });
+}
+
 pub(crate) struct CountedStream<'a, T> {
     inner: T,
     written: Option<&'a AtomicU64>,
@@ -27,9 +33,7 @@ impl<'a, T> CountedStream<'a, T> {
 
     fn record(&self, bytes: usize) {
         if let Some(counter) = self.written {
-            let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                Some(value.saturating_add(bytes as u64))
-            });
+            record_bytes(counter, bytes);
         }
     }
 }

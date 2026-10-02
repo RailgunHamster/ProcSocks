@@ -11,7 +11,7 @@ struct StatusPopover: View {
                 Image(systemName: "arrow.triangle.branch").font(.system(size: 25)).foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("ProcSocks").font(.system(size: 18, weight: .semibold))
-                    Text("按进程 TCP 代理").font(.caption).foregroundStyle(.secondary)
+                    Text("按进程 TCP / UDP 代理").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if model.busy { ProgressView().controlSize(.small) }
@@ -50,7 +50,7 @@ struct StatusPopover: View {
             }
             Divider()
             HStack {
-                Text("TCP · IPv4\(model.configuration.redirectIPv6 ? " / IPv6" : "")").font(.caption2).foregroundStyle(.secondary)
+                Text("TCP\(model.configuration.redirectUDP ? " / UDP" : "") · IPv4\(model.configuration.redirectIPv6 ? " / IPv6" : "")").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
                 Button("退出") { model.requestQuit?() }.buttonStyle(.plain).font(.caption).disabled(model.busy)
             }
@@ -254,7 +254,9 @@ struct SettingsView: View {
                 }
                 card("本地监听", symbol: "point.3.connected.trianglepath.dotted") {
                     field("监听端口", text: $model.configuration.listenPort, placeholder: "7891").frame(width: 150)
-                    Toggle("同时代理 IPv6 TCP", isOn: $model.configuration.redirectIPv6)
+                    Toggle("代理 UDP（含 QUIC）", isOn: $model.configuration.redirectUDP)
+                    Text("上游必须支持 SOCKS5 UDP。启用时若上游拒绝 UDP，后台启动会失败，已接管的数据不会自动改为直连。").font(.caption).foregroundStyle(.secondary)
+                    Toggle("同时代理 IPv6", isOn: $model.configuration.redirectIPv6)
                     Text("监听地址保持在本机回环网络。关闭 IPv6 后，IPv6 请求将走系统直连。").font(.caption).foregroundStyle(.secondary)
                 }
                 card("启动选项", symbol: "power") {
@@ -282,15 +284,15 @@ struct SettingsView: View {
                         get: { ["all", "80,443"].contains(model.configuration.redirectPorts) ? model.configuration.redirectPorts : "custom" },
                         set: { model.configuration.redirectPorts = $0 == "custom" ? "80,443,8080" : $0 }
                     )) {
-                        Text("所有 TCP 端口").tag("all")
+                        Text("所有 TCP / UDP 端口").tag("all")
                         Text("仅 80 / 443").tag("80,443")
                         Text("自定义").tag("custom")
                     }
                     if !["all", "80,443"].contains(model.configuration.redirectPorts) {
                         field("目标端口，以逗号分隔", text: $model.configuration.redirectPorts, placeholder: "80,443,8080")
                     }
-                    Toggle("要求恢复域名（TLS SNI / HTTP Host）", isOn: $model.configuration.requireHostname)
-                    Text("开启时，无法恢复域名的连接会被拒绝；关闭后可以用目标 IP 连接上游。").font(.caption).foregroundStyle(.secondary)
+                    Toggle("TCP 要求恢复域名（TLS SNI / HTTP Host）", isOn: $model.configuration.requireHostname)
+                    Text("此选项仅作用于 TCP。UDP 按原始目标 IP 转发，不做 TLS SNI 嗅探。").font(.caption).foregroundStyle(.secondary)
                     HStack(spacing: 16) {
                         field("连接超时（毫秒）", text: $model.configuration.connectTimeout, placeholder: "15000")
                         field("嗅探超时（毫秒）", text: $model.configuration.sniffTimeout, placeholder: "2000")

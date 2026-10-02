@@ -17,5 +17,6 @@
   "sniffTimeoutMs": 2000,
   "connectTimeoutMs": 15000,
   "maxSniffBytes": 65536,
-  "requireHostname": true
+  "requireHostname": true,
+  "redirectUdp": true
 }

@@ -1,7 +1,7 @@
 # ProcSocks on macOS
 
-macOS 后端与 Windows 后端解决的是同一个问题——**只让指定进程的 TCP 走 SOCKS5，
-不开启系统全局代理、不建 TUN 网卡**——但底层的实现机制完全不同。这份文档说明
+macOS 后端与 Windows 后端解决的是同一个问题——**让指定进程的 TCP / UDP 走 SOCKS5，
+不开启系统全局代理、不安装默认路由**——但底层的实现机制完全不同。这份文档说明
 为什么、怎么工作、怎么部署，以及有哪些必须知道的限制。
 
 ---
@@ -145,6 +145,7 @@ macOS 不需要 `redirectorDir` 和 `driverName`（`procsocks example` 在 macOS
   ],
   "redirectPorts": "all",
   "redirectIpv6": true,
+  "redirectUdp": true,
   "sniffTimeoutMs": 2000,
   "connectTimeoutMs": 15000,
   "maxSniffBytes": 65536,
@@ -157,7 +158,8 @@ macOS 不需要 `redirectorDir` 和 `driverName`（`procsocks example` 在 macOS
 | 字段 | 作用 | 默认 |
 |---|---|---|
 | `redirectPorts` | 哪些**目标端口**进入透明重定向：`"all"` 或 `"443,80"` 这样的列表 | `"all"` |
-| `redirectIpv6` | 生成 IPv6 重定向规则，并在 `[::1]:同一端口` 监听；关闭后 IPv6 TCP 会直连，`check` / `run` 会提醒 | `true` |
+| `redirectUdp` | 通过 SOCKS5 UDP ASSOCIATE 代理匹配进程的 UDP；上游须支持 UDP | `true` |
+| `redirectIpv6` | 生成 IPv6 重定向规则，并在 `[::1]:同一端口` 监听；关闭后 IPv6 TCP / UDP 会直连，`check` / `run` 会提醒 | `true` |
 
 透明模式的 `listen` 必须是 IPv4 回环地址；IPv6 监听由 `redirectIpv6` 自动补充。
 两个监听都绑定成功后才载入 pf，任一端口被占用都会中止启动并释放已绑定的端口。
@@ -294,10 +296,10 @@ sudo sysctl -w net.inet.ip.forwarding=0
 | 限制 | 说明 | 可能的后续 |
 |---|---|---|
 | **IPv6 依赖部署网络** | 默认生成 `inet6` 段并增加 `::1` 监听；已通过 macOS 26.6.2 的真实 pf IPv6 拦截、进程归属与上游转发验收。目标机器仍需有可用的 IPv6 路由。 | 部署时用可达的 IPv6 目标运行端到端探针 |
-| **UDP / QUIC 不处理** | 与 Windows 版一致，只做 TCP `CONNECT`。 | 需要 SOCKS5 UDP ASSOCIATE，且 pf 侧要另做 |
+| **UDP / QUIC 依赖上游** | 默认开启 SOCKS5 UDP ASSOCIATE；UDP 保留原始目标 IP，不恢复 QUIC 域名。 | 上游须支持 UDP；IPv6 UDP 另需上游 IPv6 能力 |
 | **root 进程不被代理** | `user != root` 是防死循环的机制，代价是 root 跑的应用会被豁免。macOS 上用户级应用极少以 root 运行，影响很小。 | 改用专用代理用户 + 端口段豁免 |
 | **每条连接一次 socket 表扫描** | `proc_listpids` + 逐进程 `PROC_PIDLISTFDS` 的完整扫描。 | 命中率缓存、按 uid 预筛 |
-| **无法按用户/网络排除** | 目前只有回环被硬编码排除。本网段（NAS、打印机）目前仍在重定向范围内。 | 增加 `excludeNets` / `excludePorts` |
+| **无法按用户/网络排除** | TCP 排除回环；UDP 另排除多播、广播及 IPv6 链路本地地址。本网段（NAS、打印机）目前仍在重定向范围内。 | 增加 `excludeNets` / `excludePorts` |
 
 ---
 
@@ -365,3 +367,11 @@ enable 引用与 IPv4 forwarding 值。记录见
 [PASS] Q5 能否定位发起进程            [libproc] pid=90133  /usr/bin/curl
 [PASS] Q5b libproc 能否替代 pfctl     foreign 就是原始目的地，pfctl 文本解析可以删掉
 ```
+
+UDP 通过 PF `route-to` 进入专用 `utun`，没有 `rdr` 地址改写，因此同一 socket 的
+多个目标不会串流。`libproc` 匹配 UDP socket 的本地地址、端口、连接目标与 socket
+代数；无法确定唯一进程时丢弃，不猜测。回包重新构造原始来源端点与校验和。
+本项目不安装默认路由，不修改系统 DNS；UDP 接口随后台退出销毁，PF 规则由同一
+watchdog 清理。`redirectPorts` 同时约束 TCP / UDP，`redirectUdp` 默认 `true`。
+系统共享 DNS 解析不自动跟随调用应用；应用自有 UDP DNS 受进程规则控制。
+详细验收见 [UDP 验证](udp.md)。

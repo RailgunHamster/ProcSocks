@@ -49,6 +49,9 @@ pub struct Config {
     pub max_sniff_bytes: usize,
     #[serde(default = "default_require_hostname")]
     pub require_hostname: bool,
+    /// Enable per-process UDP forwarding through SOCKS5 UDP ASSOCIATE.
+    #[serde(default = "default_redirect_udp")]
+    pub redirect_udp: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,6 +274,7 @@ impl Config {
             connect_timeout_ms: default_connect_timeout_ms(),
             max_sniff_bytes: default_max_sniff_bytes(),
             require_hostname: default_require_hostname(),
+            redirect_udp: default_redirect_udp(),
         }
     }
 }
@@ -304,6 +308,10 @@ fn default_require_hostname() -> bool {
 }
 
 fn default_redirect_ipv6() -> bool {
+    true
+}
+
+fn default_redirect_udp() -> bool {
     true
 }
 
