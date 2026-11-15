@@ -44,7 +44,8 @@ cargo build --release --locked
 使用系统自带 pf，不依赖上述 Windows 驱动。
 
 项目使用 [GPL-3.0-only](LICENSE) 许可证。个人配置、日志、构建产物和第三方
-驱动二进制不提交到仓库。
+驱动二进制不提交到仓库。全平台统一收敛与 FlClash 集成规划见
+[架构设计文档](docs/architecture.md)。
 
 ## English
 
