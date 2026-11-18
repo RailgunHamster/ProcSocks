@@ -1,11 +1,10 @@
 {
   "listen": "127.0.0.1:7891",
-  "upstream": {
-    "host": "127.0.0.1",
-    "port": 7890,
-    "username": null,
-    "password": null
-  },
+  "upstream": { "host": "127.0.0.1", "port": 7890 },
+  "upstreams": [
+    { "host": "192.168.0.112", "port": 7891 },
+    { "host": "127.0.0.1", "port": 7891 }
+  ],
   "processPatterns": [
     "curl.exe"
   ],

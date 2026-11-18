@@ -153,6 +153,17 @@ impl From<RedirectPorts> for String {
 }
 
 impl Config {
+    /// First upstream used for UDP ASSOCIATE and shared code. macOS keeps a
+    /// single upstream; the failover list is a Windows-only feature.
+    pub fn primary_upstream(&self) -> &Upstream {
+        &self.upstream
+    }
+
+    /// Test-only hook shared with `shared/udp.rs` tests.
+    pub fn set_upstream_port_for_test(&mut self, port: u16) {
+        self.upstream.port = port;
+    }
+
     pub fn load(path: &std::path::Path) -> Result<Self> {
         let bytes =
             fs::read(path).with_context(|| format!("failed to read config {}", path.display()))?;

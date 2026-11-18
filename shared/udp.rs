@@ -127,10 +127,11 @@ impl Association {
         .context("SOCKS5 UDP ASSOCIATE timed out")?
     }
     async fn connect_inner(config: &Config) -> Result<Self> {
+        let upstream = config.primary_upstream();
         let mut control =
-            TcpStream::connect((config.upstream.host.as_str(), config.upstream.port)).await?;
+            TcpStream::connect((upstream.host.as_str(), upstream.port)).await?;
         let peer = control.peer_addr()?;
-        let authenticated = config.upstream.username.is_some();
+        let authenticated = upstream.username.is_some();
         control
             .write_all(if authenticated {
                 &[5, 2, 0, 2]
@@ -143,7 +144,7 @@ impl Association {
         match method {
             [5, 0] => {}
             [5, 2] if authenticated => {
-                crate::bridge::authenticate_upstream(config, &mut control).await?
+                crate::bridge::authenticate_upstream(upstream, &mut control).await?
             }
             _ => bail!("upstream rejected SOCKS5 UDP authentication"),
         }
@@ -370,7 +371,7 @@ mod tests {
             let mock_udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             let relay_addr = mock_udp.local_addr().unwrap();
             let mut config = Config::example();
-            config.upstream.port = mock_listener.local_addr().unwrap().port();
+            config.set_upstream_port_for_test(mock_listener.local_addr().unwrap().port());
             let mock = tokio::spawn(async move {
                 let (mut control, _) = mock_listener.accept().await.unwrap();
                 let mut greeting = [0; 3];
@@ -457,7 +458,7 @@ mod tests {
             let relay = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             let relay_addr = relay.local_addr().unwrap();
             let mut config = Config::example();
-            config.upstream.port = tcp.local_addr().unwrap().port();
+            config.set_upstream_port_for_test(tcp.local_addr().unwrap().port());
             let mock = tokio::spawn(async move {
                 let (mut control, _) = tcp.accept().await.unwrap();
                 let mut greeting = [0; 3];

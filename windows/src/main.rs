@@ -109,10 +109,9 @@ async fn main() -> Result<()> {
             let bundle = RedirectorGuard::probe(&config)?;
             println!("configuration: ok");
             println!("listen: {}", config.listen);
-            println!(
-                "upstream: {}:{}",
-                config.upstream.host, config.upstream.port
-            );
+            for (index, up) in config.effective_upstreams().iter().enumerate() {
+                println!("upstream[{index}]: {}:{}", up.host, up.port);
+            }
             println!("process rules: {}", config.process_patterns.len());
             println!("native bundle: {} (verified)", bundle.id);
             println!("redirector exports: ok");

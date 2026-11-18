@@ -15,7 +15,7 @@ TCP / UDP 通信通过已有的 SOCKS5 代理，而不必开启系统全局代�
   -> 原生按进程 TCP 重定向器
   -> ProcSocks（127.0.0.1:7891）
   -> 恢复 TLS SNI / HTTP Host
-  -> 上游 SOCKS5（127.0.0.1:7890）
+  -> 上游 SOCKS5（按顺序故障转移，例如软路由优先、本地代理兜底）
 ```
 
 当原生重定向器只能提供目标 IP，而上游 SOCKS 服务器需要域名请求时，
@@ -24,6 +24,11 @@ TCP / UDP 通信通过已有的 SOCKS5 代理，而不必开启系统全局代�
 ### 功能范围
 
 - 处理 TCP `CONNECT` 与 UDP `ASSOCIATE` 流量。
+- **多上游故障转移（`upstreams` 数组）**：按配置顺序尝试每个 SOCKS5
+  上游，连接失败或握手超时自动切换到下一个；失败的上游进入递增冷却
+  （10s 起步，最多 50s），期间的新连接直接跳过它，恢复后自动切回。
+  兼容旧的单个 `upstream` 字段写法；两者同时存在时 `upstreams` 优先。
+  UDP `ASSOCIATE` 使用列表中的第一个上游。
 - 按进程规则会对可执行文件完整路径进行正则搜索；例如 `codex.exe`
   可以匹配路径中包含该名称的程序。
 - 支持从 TLS ClientHello SNI、HTTP `Host` 和 `CONNECT` authority 恢复域名。
@@ -235,7 +240,7 @@ selected process
   -> native per-process TCP redirector
   -> ProcSocks at 127.0.0.1:7891
   -> TLS SNI / HTTP Host recovery
-  -> upstream SOCKS5 at 127.0.0.1:7890
+  -> upstream SOCKS5 (ordered failover, e.g. soft-router first, local fallback)
 ```
 
 The hostname recovery step matters when the native redirector supplies only an
@@ -244,6 +249,13 @@ IP address but the upstream SOCKS server requires a domain-name request.
 ### Scope
 
 - TCP `CONNECT` traffic only.
+- **Multi-upstream failover (`upstreams` array)**: each SOCKS5 upstream is
+  tried in configured order; connect failures or negotiation timeouts move on
+  to the next candidate. Failed upstreams enter an escalating cooldown
+  (starting at 10s, capped at 50s) so new connections skip them instantly and
+  return automatically once they recover. The legacy single `upstream` field
+  keeps working; when both are present, `upstreams` wins. UDP `ASSOCIATE`
+  always uses the first entry in the list.
 - Per-process rules are regular-expression searches against the full executable
   path. A simple rule such as `codex.exe` matches any path containing that name.
 - TLS ClientHello SNI and HTTP `Host`/`CONNECT` authority are supported.

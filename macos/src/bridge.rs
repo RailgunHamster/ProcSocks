@@ -295,11 +295,12 @@ pub(crate) async fn probe_upstream(config: &Config) -> Result<u128> {
 }
 
 async fn connect_upstream_inner(config: &Config, target: &Target) -> Result<TcpStream> {
-    let mut stream = TcpStream::connect((config.upstream.host.as_str(), config.upstream.port))
+    let upstream = config.primary_upstream();
+    let mut stream = TcpStream::connect((upstream.host.as_str(), upstream.port))
         .await
         .context("failed to connect to the upstream SOCKS5 proxy")?;
 
-    let wants_auth = config.upstream.username.is_some();
+    let wants_auth = upstream.username.is_some();
     if wants_auth {
         stream.write_all(&[0x05, 0x02, 0x00, 0x02]).await?;
     } else {
@@ -312,7 +313,7 @@ async fn connect_upstream_inner(config: &Config, target: &Target) -> Result<TcpS
     }
     match greeting[1] {
         0x00 => {}
-        0x02 if wants_auth => authenticate_upstream(config, &mut stream).await?,
+        0x02 if wants_auth => authenticate_upstream(upstream, &mut stream).await?,
         0xff => bail!("upstream rejected all SOCKS5 authentication methods"),
         method => bail!("upstream selected unsupported SOCKS5 method {method}"),
     }
@@ -355,15 +356,16 @@ async fn connect_upstream_inner(config: &Config, target: &Target) -> Result<TcpS
     Ok(stream)
 }
 
-pub(crate) async fn authenticate_upstream(config: &Config, stream: &mut TcpStream) -> Result<()> {
-    let username = config
-        .upstream
+pub(crate) async fn authenticate_upstream(
+    upstream: &crate::config::Upstream,
+    stream: &mut TcpStream,
+) -> Result<()> {
+    let username = upstream
         .username
         .as_deref()
         .unwrap_or_default()
         .as_bytes();
-    let password = config
-        .upstream
+    let password = upstream
         .password
         .as_deref()
         .unwrap_or_default()
